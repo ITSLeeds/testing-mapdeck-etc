@@ -1,0 +1,514 @@
+---
+title: "CRUSE"
+output:
+  html_document:
+    theme:
+      bg: "#FFFFFF"
+      fg: "#000000"
+      highlight: "#000000"
+      primary: "#000000"
+      base_font:
+        google: "Prompt"
+      code_font:
+        google: "JetBrains Mono"
+---
+  
+  
+```{r setup, include=FALSE}
+# Aim: Load libs and counties dataframe
+library(sf)
+library(stringr)
+library(dplyr)
+library(leaflet)
+library(mapboxapi)
+library(DT)
+library(htmlwidgets)
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+has_pub_key = nchar(Sys.getenv("MAPBOX_PUBLIC_TOKEN")) > 5
+knitr::opts_chunk$set(eval = has_pub_key)
+```
+
+## The Cycle Route Uptake & Scenario Estimation tool for Transport Infrastructure Ireland (TII)
+
+**Note: the project is in public Beta phase and information on this site should be treated as work in progress. Complete the [feedback survey](https://forms.office.com/r/EW6NjXjxsD) to help improve the tool.**
+
+
+<div class="loader-bg">
+```{css, echo=FALSE}
+
+.loader-bg {
+  position: fixed;
+  z-index: 999999;
+  background: #fff;
+    width: 100%;
+  height: 100%
+}
+
+.loader {
+  border: 0 solid transparent;
+  border-radius: 50%;
+  width: 150px;
+  height: 150px;
+  position: absolute;
+  top: calc(50vh - 75px);
+  left: calc(50vw - 75px)
+}
+
+.loader:after,
+.loader:before {
+  content: '';
+  border: 1em solid #ff5733;
+  border-radius: 50%;
+  width: inherit;
+  height: inherit;
+  position: absolute;
+  top: 0;
+  left: 0;
+  animation: loader 2s linear infinite;
+  opacity: 0
+}
+
+.loader:before {
+  animation-delay: .5s
+}
+
+@keyframes loader {
+  0% {
+    transform: scale(0);
+    opacity: 0
+  }
+  
+  50% {
+    opacity: 1
+  }
+  
+  100% {
+    transform: scale(1);
+    opacity: 0
+  }
+}
+.title{
+  text-align:center !important
+}
+.html-widget {
+  margin: auto;
+  width: 100% !important;
+}
+img {
+  width: 85%;
+  padding: 2em;
+}
+.main-container{
+  max-width: 70%;
+}
+
+.iframe{
+  display: block;
+  margin: auto;
+}
+#the-cycle-route-uptake-scenario-estimation-tool-for-transport-infrastructure-ireland > h2:nth-child(1){
+text-align:center !important;
+margin-top: -0.5em !important;
+}
+.leaflet-popup-content {
+font-size: large;
+color: black;
+}
+.leaflet-popup-content > a:nth-child(1){
+  color: white;
+  font-size: large;
+}
+.leaflet-marker-label {
+  width: auto !important;
+  height: auto !important;
+  position: fixed;
+  top: 0;
+  right: 0;
+}
+.nav-link, .nav-tabs > li > a, .nav-pills > li > a, ul.nav.navbar-nav > li > a {
+  display: block;
+  padding: .5rem 1rem;
+  color: #919592;
+    text-decoration: none;
+  -webkit-text-decoration: none;
+  -moz-text-decoration: none;
+  -ms-text-decoration: none;
+  -o-text-decoration: none;
+  transition: color 0.15s ease-in-out,background-color 0.15s ease-in-out,border-color 0.15s ease-in-out;
+}
+.leaflet-popup-content-wrapper, .leaflet-popup-tip{
+  background-color: #919592 !important;
+}
+.nav:not(.nav-hidden):not(.nav-stacked):not(.flex-column) {
+  float: none !important;
+  font-size: larger;
+  z-index: 1;
+  justify-content: center;
+}
+h1.title, .title.h1 {
+  font-size: 3.875rem;
+  font-weight: bolder;
+}
+
+#cycle-route-uptake-scenario-estimation {
+text-align: center !important;
+font-style: italic;
+margin-top: -1em;
+}
+@media screen and (max-width: 1000px) {
+  h1.title, .title.h1 {
+    margin-top: 1.25rem;
+    font-size: 3.875rem;
+    font-weight: bolder;
+  }
+  img{
+    height: 3em;
+    max-width: 6em;
+    padding: 1em;
+  }
+}
+}
+
+```
+
+```{r pkg, include=FALSE}
+# TODO this will contain more variables we need, primarily % cycling
+# Load counties geometry
+counties_raw = readRDS("counties.Rds")
+counties_raw = counties_raw %>%
+  mutate(county_name = stringr::str_to_title(COUNTY))
+# Load pcycle_data at the county level
+county_trips = read.csv("county-trips.csv")
+# counties_index = county_trips %>%
+#   select(county_name, pcycle_baseline)
+counties_index = counties_raw %>%
+  dplyr::left_join(county_trips)
+counties_index = counties_index %>%
+  dplyr::rename(Name = COUNTY) %>%
+  dplyr::mutate(Name =  stringr::str_to_sentence(Name)) %>%
+  dplyr::mutate(url = paste0(
+    "<a href='",
+    tolower(Name) ,
+    "/' target='_blank'>",
+    Name,
+    "</a>"
+  ))
+counties_index = sf::st_as_sf(counties_index)
+```
+
+
+## {.tabset}
+### Map
+```{r, echo=FALSE}
+tippy::tippy_this(elementId = "word", tooltip = "At low zoom, the map shows the % cycle uptake per county; at high zoom, it displays a cycle friendliness measure, with a score between 0 (very unfriendly) and 100 (very friendly). Both measures are shown for each given scenario. See the FAQs for more details")
+```
+
+
+```{r, fig.align="center", out.height="500px"}
+palette = c(
+  '#d73027',
+  '#f46d43',
+  '#fdae61',
+  '#fee090',
+  '#ffffbf',
+  '#e0f3f8',
+  '#abd9e9',
+  '#74add1',
+  '#4575b4'
+)
+breaks = c(0, 1, 2, 3, 5, 10, 20, 30, 40, Inf)
+pal_baseline = leaflet::colorBin(palette, bins = breaks,
+                                 domain = counties_index$pcycle_baseline)
+pal_near = leaflet::colorBin(palette, bins = breaks,
+                             domain = counties_index$pcycle_near)
+pal_climate = leaflet::colorBin(palette, bins = breaks,
+                                domain = counties_index$pcycle_climate)
+pal_dutch = leaflet::colorBin(palette, bins = breaks,
+                              domain = counties_index$pcycle_godutch)
+pal_ebike = leaflet::colorBin(palette, bins = breaks,
+                              domain = counties_index$pcycle_ebike)
+schools_raw = readRDS("schools_all.Rds")
+# main map
+leaflet::leaflet(counties_index) %>%
+  leaflet::addProviderTiles(
+    providers$CartoDB.Positron,
+    group = "Grey basemap",
+    options = leaflet::providerTileOptions(minZoom = 5, maxZoom = 22)
+  ) %>%
+  leaflet::addPolygons(
+    data = counties_index %>% sf::st_transform(crs = 4326),
+    color = "black",
+    fillColor = "transparent",
+    group = "Borders",
+    popup = paste0("View county results: ", counties_index$url),
+    opacity = 0.7,
+    weight = 1.2,
+    label = ~ Name,
+    labelOptions = leaflet::labelOptions(noHide = F, permanent = TRUE, direction = "auto",sticky = FALSE, textsize = "1.5em")) %>%
+  leaflet::addCircles(
+    data = schools_raw,
+    group = "Schools",
+    color = "black",
+    opacity = 0.8,
+    fillOpacity = 0.3
+  ) %>%
+  #polygons
+  mapboxapi::addMapboxTiles(
+    style_id = "cl77hy22i000m14pa2r440vgi",
+    username = "nathanaelisamapper",
+    group = "Baseline scenario",
+    options = leaflet::providerTileOptions(minZoom = 1, maxZoom = 9),
+    access_token = Sys.getenv("MAPBOX_PUBLIC_TOKEN")
+  ) %>%
+  mapboxapi::addMapboxTiles(
+    style_id = "cl77h0i4v001u15o1cp39sk37",
+    username = "nathanaelisamapper",
+    group = "Near Market",
+    options = leaflet::providerTileOptions(minZoom = 1, maxZoom = 9),
+    access_token = Sys.getenv("MAPBOX_PUBLIC_TOKEN")
+  ) %>%
+  mapboxapi::addMapboxTiles(
+    style_id = "cl77hqtom000214qrk6ceqeur",
+    username = "nathanaelisamapper",
+    group = "Climate Action Plan",
+    options = leaflet::providerTileOptions(minZoom = 1, maxZoom = 9),
+    access_token = Sys.getenv("MAPBOX_PUBLIC_TOKEN")
+  ) %>%
+  mapboxapi::addMapboxTiles(
+    style_id = "cl77hvhpx000d14nz0uhmsp40",
+    username = "nathanaelisamapper",
+    group = "Ebike",
+    options = leaflet::providerTileOptions(minZoom = 1, maxZoom = 9),
+    access_token = Sys.getenv("MAPBOX_PUBLIC_TOKEN")
+  ) %>%
+  mapboxapi::addMapboxTiles(
+    style_id = "cl77i0bqh003i16n2cijgn6r1",
+    username = "nathanaelisamapper",
+    group = "Go Dutch",
+    options = leaflet::providerTileOptions(minZoom = 1, maxZoom = 9),
+    access_token = Sys.getenv("MAPBOX_PUBLIC_TOKEN")
+  ) %>%
+  #rnet
+  mapboxapi::addMapboxTiles(
+    style_id = "cl66fjj97000a15ru2hhss06g",
+    username = "nathanaelisamapper",
+    group = "Baseline scenario",
+    options = leaflet::providerTileOptions(minZoom = 9, maxZoom = 22),
+    access_token = Sys.getenv("MAPBOX_PUBLIC_TOKEN")
+  ) %>%
+  mapboxapi::addMapboxTiles(
+    style_id = "cl66f8ax6001i14ti630sk73z",
+    username = "nathanaelisamapper",
+    group = "Climate Action Plan",
+    options = leaflet::providerTileOptions(minZoom = 9, maxZoom = 22),
+    access_token = Sys.getenv("MAPBOX_PUBLIC_TOKEN")
+  ) %>%   mapboxapi::addMapboxTiles(
+    style_id = "cl66foarr001d14lmc88wyu42",
+    username = "nathanaelisamapper",
+    group = "Near Market",
+    options = leaflet::providerTileOptions(minZoom = 9, maxZoom = 22),
+    access_token = Sys.getenv("MAPBOX_PUBLIC_TOKEN")
+  )  %>% mapboxapi::addMapboxTiles(
+    style_id = "cl66flaic000114t385c8spxn",
+    username = "nathanaelisamapper",
+    group = "Ebike",
+    options = leaflet::providerTileOptions(minZoom = 9, maxZoom = 22),
+    access_token = Sys.getenv("MAPBOX_PUBLIC_TOKEN")
+  ) %>% mapboxapi::addMapboxTiles(
+    style_id = "cl66fmn9j001g14lkbone3hye",
+    username = "nathanaelisamapper",
+    group = "Go Dutch",
+    options = leaflet::providerTileOptions(minZoom = 9, maxZoom = 22),
+    access_token = Sys.getenv("MAPBOX_PUBLIC_TOKEN")
+  ) %>%
+  leaflet::setView(lng = -8.2,
+                   lat = 53.5,
+                   zoom = 7) %>%
+  leaflet::addLegend(
+    "bottomleft",
+    colors = c("#882255",  "#CC6677", "#44AA99", "#117733"),
+    labels = c("0 to 25", "25 to 50", "50 to 75", "75 to 100"),
+    title = "Cycle friendliness",
+    group = "Friend",
+    opacity = 0.7
+  ) %>%
+  leaflet::addLegend(
+    "bottomleft",
+    colors = c(
+      '#d73027',
+      '#f46d43',
+      '#fdae61',
+      '#fee090',
+      '#ffffbf',
+      '#e0f3f8',
+      '#abd9e9',
+      '#74add1',
+      '#4575b4'
+    ),
+    labels = c(
+      "0 to 1",
+      "1 to 2",
+      "2 to 3",
+      "3 to 5",
+      "5 to 10",
+      "10 to 20",
+      "20 to 30",
+      "30 to 40",
+      "40 to more"
+    ),
+    title = "Percent cycling",
+    group = "Base",
+    opacity = 0.7
+  ) %>%
+  leaflet::addLegend(
+    title = "Get Started:",
+    group = "Help",
+    position = "bottomright",
+    colors = c("white",
+               "white"),
+    labels = c(
+      "Zoom in to explore the network",
+      "Click on a county for detailed results"
+    )
+  ) %>%
+  addLayersControl(
+    baseGroups  = c(
+      "Baseline scenario",
+      "Near Market",
+      "Climate Action Plan",
+      "Go Dutch",
+      "Ebike"
+    ),
+    overlayGroups = c("Schools"),
+    options = leaflet::layersControlOptions(collapsed = FALSE)
+  ) %>%
+  leaflet::groupOptions(group = "Help", zoomLevels = 7:8)  %>%
+    leaflet::groupOptions(group = "Base", zoomLevels = 1:9) %>%
+  leaflet::groupOptions(group = "Friend", zoomLevels = 10:20) %>%
+  leaflet::hideGroup("Schools")  %>%
+  htmlwidgets::onRender("
+        function() {
+            $('.leaflet-control-layers-base').prepend('<label style=\"text-align:center;font-size:larger;\"><b>Scenarios</b></label>');
+        }
+    ")
+
+```
+
+
+<p style="float:left;margin-bottom:-2em">What does <u id='word'>this map show</u>?</p>
+  
+### Table
+  
+  Click on a county to further explore results
+```{r, fig.out="100%"}
+# Aim: Build table for homepage
+dn = "popupCycleways/v1"
+built_counties = list.files(dn)
+set.seed(42)
+counties_index %>%
+  sf::st_drop_geometry() %>%
+  dplyr::select(url, Population, "% cycling (Baseline)" = pcycle_baseline, "% cycling (Near Market)" = pcycle_near,  "% cycling (Climate Action Plan)" = pcycle_climate,  "% cycling (Go Dutch)" = pcycle_godutch,  "% cycling (Ebike)" = pcycle_ebike) %>%
+  dplyr::rename(Name = url) %>%
+  dplyr::arrange(Name) %>%
+  dplyr::mutate_if(is.numeric, round, 1) %>%
+  DT::datatable(escape = -2, filter = 'none', options = list(pageLength = 5,
+                                                             responsive = TRUE,
+                                                             extensions = c('Responsive')))
+```
+
+### About
+
+**Aim and scope of the CRUSE tool**
+
+[Transport Infrastructure Ireland](https://www.tii.ie/) commissioned the Institute for Transport Studies (University of Leeds) and AECOM to develop the Cycle Route Uptake and Scenario Estimation ([CRUSE]()) tool to support strategic cycle network planning and investment prioritisation across the Republic of Ireland.
+The CRUSE tool has been used to develop a number of scenarios for cycle network investment in the Republic of Ireland.
+The CRUSE tool estimates the potential uptake of a cycle route based on factors such as distance, terrain, and attractiveness.
+This information can be used to inform decisions about where best to invest in new or improved cycle routes.
+
+**The CRUSE Team**
+
+* Transport Infrastructure Ireland (direction): Dr Suzanne Meade and Dan Brennan.
+
+* Institute for Transport Studies (University of Leeds) (development): Dr Robin Lovelace, Dr Joey Talbot, Dr Eugeni Vidal-Tortosa, and Nathanael Sheehan.
+
+* AECOM (management): Peter Wright, Ciaran Maguire, and Shane Dunny.
+
+**Acknowledgements**
+
+We would like to thank transport and road safety practitioners from the county councils of Limerick, Kildare (Donal Hodgins and Paul McDonald), Kerry (Lucy Curtis and Joyce O'Boyle), and Carlow (Seamus Loughlin and Kieran  Cullinane) for their useful feedback on the tool.
+Thanks also to CycleStreets (Martin Lucas-Smith and Simon Nuttall) for providing data on routes.
+
+**Feedback**
+
+You can give feedback on the tool [in the online survey](https://forms.office.com/r/EW6NjXjxsD).
+
+**Contact**
+
+[Send an email to TII](mailto:info@tii.ie) with "CRUSE" in the email title.
+
+### Video
+
+<iframe src="https://www.youtube.com/embed/UKtOEBN47eg" height="420px" width="840px" title="YouTube video player" frameborder="0" data-external="1"  class="iframe" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+  
+  
+### FAQ
+
+Short answers to key frequently answered questions (FAQ) are provided below.
+See the full [FAQ page](faq.html) for more details and answers to questions about how the tool works.
+  
+#### What is the CRUSE tool?
+
+The Cycle Route Uptake and Scenarios Estimation (CRUSE) tool is a strategic cycle network planning support tool.
+It was funded by Transport Infrastructure Ireland (TII) and builds on the approach used in the Propensity to Cycle Tool ([PCT](https://www.pct.bike/)).
+
+#### What is the purpose of the CRUSE tool?
+
+The CRUSE tool supports strategic cycle network planning to support TII's remit under the the EU Road Infrastructure Safety Management ([RISM](https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=celex%3A32008L0096)) Directive, and to provide cycle flow estimates for TII's Project Appraisal Guidelines Unit 13.0 on Appraisal of Active Modes [PE-PAG-02036](https://www.tiipublications.ie/library/PE-PAG-02036-02.pdf).
+
+#### What can the tool be used for?
+
+The tool's primary purpose is to support design of joined-up, evidence-based and effective strategic cycle networks.
+The tool can be used to visualise current cycling levels, highlight gaps in existing networks, compare 'fast' and 'quiet' networks and to understand how these could change in future, under scenarios of cycling uptake.
+
+#### How can I access the tool?
+
+CRUSE is a free and publicly available tool that is available at the website [cruse.bike](https://cruse.bike/) for everyone to use.
+
+#### Which trip purposes are included in the tool?
+
+Commute trips, travel to primary school, travel to secondary school, travel to tertiary education, social trips, personal trips and shopping trips.
+Recreational trips will soon be added to the tool.
+
+#### What data does the tool use?
+
+Travel to work and school is based on Central Statistics Office POWSCAR origin-destination data from the 2016 Census. We use Electoral Divisions as the geographical zones between which journeys are defined.
+
+### News
+
+#### 2022-08-08
+
+- New landing page
+
+#### 2022-09-22
+
+- [Feedback survey](https://forms.office.com/r/EW6NjXjxsD) added
+
+#### 2022-09-23
+
+- CRUSE stall and presentation at TII National Roads and Greenways Conference 2022, Sligo
+- [Slides](CRUSE.pdf) from the event are available online
+- [Audio](cruse-talk-2022-09.m4a) available online
+
+##
+
+<div>
+  
+  | | [![University of Leeds Logo](https://user-images.githubusercontent.com/1825120/182801807-6cdc3b21-f0ec-4296-a8d2-4fa077639bd8.png)](https://leeds.ac.uk/) | [![Transport Infrastructure Ireland Logo](https://user-images.githubusercontent.com/1825120/182802017-a36b6405-bf52-4a75-9633-53f8b596111d.png)](https://www.tii.ie/) | [![Cycle streets Logo](https://user-images.githubusercontent.com/1825120/186419992-1e5688d5-dd36-4d90-88a0-a786c94da2a6.png)](https://www.cyclestreets.net/)  |  [![AECOM Logo](https://user-images.githubusercontent.com/1825120/182802264-a822afdb-da6c-4801-8c11-f1fe2cc0776a.png)](https://aecom.com/) 
+|---|---|---|---|---|---|
+  
+  
+```{js}
+setTimeout(function(){
+  $('.loader-bg').fadeToggle();
+}, 1000);
+```
